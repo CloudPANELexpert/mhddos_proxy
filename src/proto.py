@@ -75,7 +75,7 @@ class H2FloodIO(asyncio.Protocol):
 
     _max_num_streams = 128
     _close_delay = 10.0
-    _abort_delay = 0.5
+    _abort_delay = 10.0
 
     def __init__(
         self,
