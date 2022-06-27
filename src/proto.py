@@ -73,7 +73,7 @@ H2Request = Tuple[H2Headers, Optional[bytes]]
 
 class H2FloodIO(asyncio.Protocol):
 
-    _max_num_streams = 63
+    _max_num_streams = 128
     _close_delay = 10.0
     _abort_delay = 0.5
 
