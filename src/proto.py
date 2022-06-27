@@ -96,9 +96,9 @@ class H2FloodIO(asyncio.Protocol):
         self._connections = connections
         self._rcv = rcv
         self._close_handle = None
+        self._abort_handle = None
 
     def connection_made(self, transport) -> None:
-        print("connection_made")
         self._connections.add(hash(transport))
         if self._on_connect and not self._on_connect.done():
             self._on_connect.set_result(True)
@@ -124,17 +124,27 @@ class H2FloodIO(asyncio.Protocol):
         # completely random wait interval
         self._close_handle = self._loop.call_later(self._close_delay, self._close)
 
+    def _cleanup_handle(self, handle_name: str):
+        handle = getatt(self, handle_name, None)
+        if handle is None:
+            return
+        if not handle.done():
+            handle.cancel()
+        setattr(self, handle_name, None)
+
     # XXX: do we need to be good citizens by sending RST?
     def _close(self):
+        self._cleanup_handle('_close_handle')
         self._conn.close_connection()
         data = self._conn.data_to_send()
-        self._transport.write(data)
-        self._loop.call_later(self._abort_delay, self._abort)
+        if data:
+            self._transport.write(data)
+        self._abort_handle = self._loop.call_later(self._abort_delay, self._abort)
 
     def _abort(self):
-        if self._close_handle is not None:
-            self._close_handle.cancel()
-            self._close_handle = None
+        self._cleanup_close()
+        self._cleanup_handle('_close_handle')
+        self._cleanup_handle('_abort_handle')
         if self._transport:
             self._connections.remove(hash(self._transport))
             self._transport.abort()
