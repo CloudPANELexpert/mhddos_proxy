@@ -47,7 +47,7 @@ class ProxySet:
         self._provided_proxies = provided_proxies
         self._proxies_file = proxies_file
         self._skip_ratio = skip_ratio
-        self._loaded_proxies = []
+        self._loaded_proxies: List[str] = []
         self._num_proxies = 0
         self._connections = defaultdict(int)
 

@@ -79,12 +79,13 @@ class cl:
 
 class Methods:
     HTTP_METHODS: Set[str] = {
-        "CFB", "BYPASS", "GET", "RGET", "H2GET", "HEAD", "RHEAD", "POST", "STRESS", "DYN", "SLOW",
-        "NULL", "COOKIE", "PPS", "EVEN", "AVB",
-        "APACHE", "XMLRPC", "DOWNLOADER", "RHEX", "STOMP",
+        "CFB", "BYPASS", "HTTP_TEMPLATE",
+        "GET", "RGET", "H2_GET", "HEAD", "RHEAD", "POST", "STRESS",
+        "DYN", "SLOW", "NULL", "COOKIE", "PPS", "EVEN", "AVB",
+        "APACHE", "XMLRPC", "DOWNLOADER", "RHEX", "STOMP", "GOSPASS",
         # this is not HTTP method (rather TCP) but this way it works with --http-methods
         # settings being applied to the entire set of targets
-        "TREX"
+        "TREX",
     }
     TCP_METHODS: Set[str] = {"TCP", }
     UDP_METHODS: Set[str] = {

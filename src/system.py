@@ -8,17 +8,25 @@ import selectors
 import socket
 import sys
 import time
+import traceback
 from asyncio import events
 from contextlib import suppress
 from functools import lru_cache
 from itertools import cycle
 from typing import List, Optional, Tuple, Union
 
-import psutil
 import requests
 
 from src.core import cl, CONFIG_URL, logger
 from src.i18n import translate as t
+
+
+# @formatter:off
+print_exc_orig = traceback.print_exc
+traceback.print_exc = lambda *args, **kwargs: None
+import psutil
+traceback.print_exc = print_exc_orig
+# @formatter:on
 
 
 IS_WINDOWS = sys.platform in {"win32", "cygwin"}
@@ -190,8 +198,8 @@ def _detect_port_range() -> Optional[Tuple[int, int]]:
         try:
             ctl = "netsh int ipv4 show dynamicport tcp"
             with os.popen(ctl) as f:
-                low, high = re.findall(r"\d+", f.read())
-            return int(low), int(high)
+                low, ports = re.findall(r"\d+", f.read())
+            return int(low), int(low) + int(ports)
         except Exception:
             return IANA_DEFAULT_PORT_RANGE
 
@@ -202,17 +210,15 @@ def detect_port_range_size() -> int:
         low, high = _detect_port_range()
     except Exception:
         low, high = IANA_DEFAULT_PORT_RANGE  # IANA default
-    return high - low + 1
+    return max(high - low + 1, 1024)  # Be safe and never return less then 1024
 
 
 @lru_cache(maxsize=None)
 def detect_local_iface() -> Optional[str]:
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-        try:
+    with suppress(Exception):
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.connect(("8.8.8.8", 80))
-        except:
-            return None
-        laddr, _ = sock.getsockname()
+            laddr, _ = sock.getsockname()
         for iface_name, addrs in psutil.net_if_addrs().items():
             for addr in addrs:
                 if addr.family == socket.AF_INET and addr.address == laddr:
@@ -221,10 +227,12 @@ def detect_local_iface() -> Optional[str]:
 
 
 def fetch_netstats(iface: Optional[str]) -> Optional['psutil._common.snetio']:
-    if iface is None:
-        return psutil.net_io_counters()
-    else:
-        return psutil.net_io_counters(pernic=True).get(iface, None)
+    with suppress(Exception):
+        if iface is None:
+            return psutil.net_io_counters()
+        else:
+            return psutil.net_io_counters(pernic=True).get(iface, None)
+    return None
 
 
 class NetStats:

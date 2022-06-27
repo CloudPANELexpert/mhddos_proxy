@@ -12,12 +12,6 @@ def init_argparse() -> argparse.ArgumentParser:
         help='List of targets, separated by spaces',
     )
     parser.add_argument(
-        '-c',
-        '--config',
-        dest='targets_config',
-        help='URL or local path to file with attack targets',
-    )
-    parser.add_argument(
         '-t',
         '--threads',
         type=int,
@@ -28,6 +22,18 @@ def init_argparse() -> argparse.ArgumentParser:
         type=lambda val: val if val == COPIES_AUTO else int(val),
         default=1,
         help='Number of copies (default is 1). Use "auto" to set the value automatically',
+    )
+    parser.add_argument(
+        '--itarmy',
+        action='store_true',
+        default=False,
+        help='Use targets from https://itarmy.com.ua/'
+    )
+    parser.add_argument(
+        '--lang',
+        type=str.lower,
+        choices=LANGUAGES,
+        help='Select language (default is ua)'
     )
     parser.add_argument(
         '--vpn',
@@ -41,15 +47,15 @@ def init_argparse() -> argparse.ArgumentParser:
              'Optionally, specify a chance of using my IP (default is 2%%)',
     )
     parser.add_argument(
-        '--http-methods',
-        nargs='+',
-        type=str.upper,
-        default=['GET'],
-        choices=Methods.HTTP_METHODS,
-        help='List of HTTP(L7) methods to use. Default is GET',
+        '-c',
+        '--config',
+        dest='targets_config',
+        metavar='URL|path',
+        help='URL or local path to file with attack targets',
     )
     parser.add_argument(
         '--proxies',
+        metavar='URL|path',
         help='URL or local path to file with proxies to use',
     )
     parser.add_argument(
@@ -58,16 +64,12 @@ def init_argparse() -> argparse.ArgumentParser:
         help='List of proxies to use, separated by spaces',
     )
     parser.add_argument(
-        '--itarmy',
-        action='store_true',
-        default=False,
-        help='Attack targets from https://t.me/itarmyofukraine2022'
-    )
-    parser.add_argument(
-        '--lang',
-        type=str.lower,
-        choices=LANGUAGES,
-        help='Select language (default is ua)'
+        '--http-methods',
+        nargs='+',
+        type=str.upper,
+        default=['GET'],
+        choices=Methods.HTTP_METHODS,
+        help='List of HTTP(L7) methods to use. Default is GET',
     )
 
     # Advanced

@@ -2,7 +2,7 @@ from typing import Optional, Tuple
 
 from .core import cl, CPU_COUNT, DEFAULT_THREADS, logger, USE_ONLY_MY_IP
 from .i18n import translate as t
-from .mhddos import Tools
+from .utils import Tools
 from .system import NetStats
 
 
@@ -62,7 +62,7 @@ def print_banner(args):
     rows = []
     if not args.lang:
         rows.append(
-            f"- {cl.YELLOW}Change language:{cl.BLUE} `--lang en` / `--lang ua`{cl.RESET}"
+            f"- {cl.YELLOW}Change language:{cl.BLUE} `--lang en` / `--lang es`{cl.RESET}"
         )
     if not args.threads:
         rows.append(

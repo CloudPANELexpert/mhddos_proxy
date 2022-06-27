@@ -2,6 +2,7 @@ import asyncio
 import errno
 import time
 from enum import Enum
+import random
 from typing import Any, Callable, Generator, List, Optional, Set, Tuple
 
 from OpenSSL import SSL
@@ -15,9 +16,7 @@ import collections
 import collections.abc
 setattr(collections, 'MutableSet', collections.abc.MutableSet)
 setattr(collections, 'MutableMapping', collections.abc.MutableMapping)
-
 import h2.connection
-setattr(collections, 'MutableMapping', collections.abc.MutableMapping)
 
 
 FloodSpecGen = Generator[Tuple[int, Any], None, None]
@@ -52,25 +51,24 @@ class FloodSpec:
 
     @staticmethod
     def from_bytes(packet: bytes, num_packets: int) -> FloodSpecGen:
-        packet_size = len(packet)
         for _ in range(num_packets):
-            yield FloodOp.WRITE, (packet, packet_size, 1)
+            yield FloodOp.WRITE, packet
 
     @staticmethod
     def from_buffer(packet: Tuple[Callable[[], bytes], int], num_packets: int) -> FloodSpecGen:
         packet_gen, stacked = packet
-        packet, packet_size = None, None
+        packet = packet_gen()
         for _ in range(int(num_packets / stacked)):
-            if packet is None:
-                packet = packet_gen()
-                packet_size = len(packet)
-            yield FloodOp.WRITE, (packet, packet_size, stacked)
+            yield FloodOp.WRITE, packet
 
     @staticmethod
     def from_callable(packet: Callable[[], bytes], num_packets: int) -> FloodSpecGen:
         for _ in range(num_packets):
-            _packet: bytes = packet()
-            yield FloodOp.WRITE, (_packet, len(_packet), 1)
+            yield FloodOp.WRITE, packet()
+
+
+H2Headers = List[Tuple[str, str]]
+H2Request = Tuple[H2Headers, Optional[bytes]]
 
 
 class H2FloodIO(asyncio.Protocol):
@@ -78,7 +76,7 @@ class H2FloodIO(asyncio.Protocol):
     def __init__(
         self,
         loop,
-        headers: List[Tuple[str, str]],
+        requests: List[H2Request],
         on_close,
         *,
         connections,
@@ -87,7 +85,7 @@ class H2FloodIO(asyncio.Protocol):
         self._loop = loop
         # XXX: ideally we have to read this from settings frame but it's gonna be harder
         self._num_streams = 63
-        self._headers = headers
+        self._requests = requests
         self._on_close = on_close
         self._connections = connections
         self._rcv = rcv
@@ -102,7 +100,8 @@ class H2FloodIO(asyncio.Protocol):
         self._conn.initiate_connection()
         # XXX: full request might be (should be) provided from the method definition
         for ind in range(self._num_streams):
-            self._conn.send_headers(1+ind*2, self._headers, end_stream=True)
+            headers, body = random.choice(self._requests)
+            self._conn.send_headers(1+ind*2, headers, end_stream=True)
             # XXX: we should also consider body + trailings
         # send everything
         self._loop.call_soon(self._send)
@@ -119,7 +118,7 @@ class H2FloodIO(asyncio.Protocol):
         self._conn.close_connection()
         data = self._conn.data_to_send()
         self._transport.write(data)
-        self._loop.call_later(1, self._abort)
+        self._loop.call_later(0.5, self._abort)
 
     def _abort(self):
         if self._transport:
@@ -143,7 +142,6 @@ class H2FloodIO(asyncio.Protocol):
         if self._tranposrt is None:
             return
         self._tranport.write(self._conn.data_to_send())
-
 
 
 # XXX: add instrumentation to keep track of connection lifetime,
@@ -279,7 +277,7 @@ class FloodIO(asyncio.Protocol):
             #      as we still need to keep track of current op & stash
             op, args = next(self._flood_spec)
             if op == FloodOp.WRITE:
-                packet, size, num_stacked = args
+                packet = args
                 self._transport.write(packet)
                 self._handle = None
                 if not self._paused:

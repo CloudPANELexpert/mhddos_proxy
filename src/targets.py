@@ -1,4 +1,5 @@
 import base64
+import json
 from typing import Dict, Optional, Set
 
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
@@ -15,11 +16,7 @@ Options = Dict[str, str]
 
 
 class Target:
-    OPTION_IP = "ip"
-    OPTION_RPC = "rpc"
-    OPTION_HIGH_WATERMARK = "watermark"
-
-    __slots__ = ['url', 'method', 'options', 'addr', 'hash']
+    __slots__ = ['url', 'method', 'options', 'addr', 'hash', 'cache']
 
     def __init__(
         self,
@@ -28,12 +25,18 @@ class Target:
         options: Optional[Options] = None,
         addr: Optional[str] = None
     ):
+        if method and method not in Methods.ALL_METHODS:
+            raise ValueError(f'Invalid method {method}')
+
         self.url = url
         self.method = method
         self.options = options or {}
-        self.addr = self.option(Target.OPTION_IP, addr)
+        self.addr = self.option("ip", addr)
 
-        self.hash = hash((self.url, self.method, tuple(self.options.items()), self.addr))
+        options_str = json.dumps(self.options, sort_keys=True)
+        self.hash = hash((self.url, self.method, options_str, self.addr))
+
+        self.cache = {}  # In case you want to cache something per-target, like templates
 
     def __eq__(self, other):
         return self.hash == other.hash
@@ -45,17 +48,24 @@ class Target:
     def from_string(cls, raw: str) -> "Target":
         parts = [part.strip() for part in raw.split(" ")]
         n_parts = len(parts)
-        url = URL(Target.prepare_url(parts[0]))
+        url = URL(cls.prepare_url(parts[0]))
 
         method = None
         if n_parts > 1:
             method = parts[1].upper()
-            if method not in Methods.ALL_METHODS:
-                raise ValueError(f'Invalid method {method}')
 
-        options = dict(tuple(part.split("=")) for part in parts[2:])
         addr = url.host if inet.is_address(url.host) else None
-        return cls(url, method, options, addr)
+        return cls(url, method, {}, addr)
+
+    @classmethod
+    def from_dict(cls, raw: dict) -> "Target":
+        url = URL(cls.prepare_url(raw['target']))
+        return Target(
+            url=url,
+            method=raw.get('method'),
+            addr=raw.get('ip'),
+            options=raw.get('options'),
+        )
 
     @staticmethod
     def prepare_url(target: str) -> str:
@@ -78,7 +88,7 @@ class Target:
     def is_udp(self) -> bool:
         return self.url.scheme == "udp"
 
-    def option(self, key: str, default: Optional[str] = None) -> Optional[str]:
+    def option(self, key: str, default: Optional[object] = None) -> Optional[object]:
         return self.options.get(key, default)
 
     @property
@@ -122,15 +132,24 @@ class TargetsLoader:
             raise RuntimeError('Failed to load configuration')
 
         content = self._possibly_decrypt(content).decode()
-
         targets = []
-        for row in content.splitlines():
-            target = row.strip()
-            if target and not target.startswith('#'):
+
+        try:
+            data = json.loads(content)
+            for config in data['targets']:
                 try:
-                    targets.append(Target.from_string(target))
-                except Exception:
-                    logger.warning(f'{cl.MAGENTA}Failed to parse: {target}{cl.RESET}')
+                    targets.append(Target.from_dict(config))
+                except Exception as exc:
+                    logger.warning(f'{cl.MAGENTA}Failed to parse {config} ({exc}){cl.RESET}')
+
+        except json.JSONDecodeError:
+            for row in content.splitlines():
+                target = row.strip()
+                if target and not target.startswith('#'):
+                    try:
+                        targets.append(Target.from_string(target))
+                    except Exception as exc:
+                        logger.warning(f'{cl.MAGENTA}Failed to parse {target} ({exc}){cl.RESET}')
 
         return targets
 

@@ -153,7 +153,7 @@ async def run_ddos(args):
     # Give user some time to read the output
     await asyncio.sleep(5)
 
-    attack_settings = AttackSettings(
+    base_settings = AttackSettings(
         connect_timeout_seconds=8.0,
         dest_connect_timeout_seconds=10.0,
         drain_timeout_seconds=15.0,
@@ -173,13 +173,12 @@ async def run_ddos(args):
 
     def prepare_flooder(target: Target, method: str) -> Union[AsyncUdpFlood, AsyncTcpFlood]:
         if target.has_options:
-            target_rpc = int(target.option(Target.OPTION_RPC, "0"))
-            settings = attack_settings.with_options(
-                requests_per_connection=target_rpc if target_rpc > 0 else None,
-                high_watermark=target.option(Target.OPTION_HIGH_WATERMARK),
+            settings = base_settings.with_options(
+                requests_per_connection=target.option("rpc"),
+                high_watermark=target.option("watermark"),
             )
         else:
-            settings = attack_settings
+            settings = base_settings
 
         return mhddos_main(
             target,
@@ -444,7 +443,7 @@ def main():
         if not python_bin.endswith('.exe'):  # windows is not supported
             new_command = f'./runner.sh {python_bin} ' + ' '.join(sys.argv[1:])
             logger.warning(
-                f"{cl.CYAN}{t('Try running with automatic updates: ')}{new_command}{cl.RESET}"
+                f"{cl.CYAN}{t('Try running with automatic updates')}: {new_command}{cl.RESET}"
             )
             print()
 

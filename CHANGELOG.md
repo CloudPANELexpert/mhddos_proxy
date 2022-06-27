@@ -1,3 +1,5 @@
+- **22.06.2022** 
+  - Performance improvements. The `--debug` option is deprecated to avoid negative impact on performance
 - **10.06.2022** 
   - Introduced `--proxy` option for providing custom proxies directly from command args
 - **08.06.2020**
@@ -5,7 +7,7 @@
 - **25.05.2022**
   - Improved default output - the `--debug` option is no longer required 
 - **21.05.2022**
-  - Added english localization - use flag `--lang EN` (more languages may be added later)
+  - Added english localization - use flag `--lang en` (more languages may be added later)
 - **18.05.2022**
   - Added `--copies` option in order to run multiple copies (recommended for use with 4+ CPUs and network > 100 Mb / s).
 - **15.05.2022**
@@ -27,7 +29,7 @@
   - Fixed color display on Windows terminal (without editing the registry)
   - In case of no targets available, the script will wait, instead of stopping completely
 - **09.04.2022** New proxy utilization system; as of now everyone gets ~ 200 proxies to attack from a total pool of 10,000+. The `-p` (` --period`) and `--proxy-timeout` parameters are deprecated
-- **04.04.2022** Added the ability to use your own proxy list for the attack: [instructions] (#custom-proxies)
+- **04.04.2022** Added the ability to use your own proxy list for the attack
 - **03.04.2022** Fixed 'Too many open files' bug (thanks to @kobzar-darmogray and @euclid-catoptrics)
 - **02.04.2022** Working threads are being reused rather than restarted for each cycle. Ctrl-C has also been fixed
 - **01.04.2022** Updated CFB attack method to synchronize with MHDDoS
