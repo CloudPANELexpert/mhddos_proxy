@@ -338,7 +338,8 @@ class AsyncTcpFlood(FloodBase):
             H2FloodIO,
             self._loop,
             [req], # XXX: ready to do some randomization here
-            on_close,
+            on_connect=on_connect,
+            on_close=on_close,
             connections=self._connections
         )
 
