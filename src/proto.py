@@ -75,8 +75,9 @@ H2Request = Tuple[H2Headers, Optional[bytes]]
 class H2FloodIO(asyncio.Protocol):
 
     _max_num_streams = 1024
-    _close_delay = 10.0
+    _recv_settings_timeout = 3.0
     _abort_delay = 10.0
+    _
 
     def __init__(
         self,
@@ -98,6 +99,7 @@ class H2FloodIO(asyncio.Protocol):
         self._transport = None
         self._close_handle = None
         self._abort_handle = None
+        self._recv_settings_timeout_handle = None
         self._requests_sent = False
 
     def connection_made(self, transport) -> None:
@@ -108,7 +110,8 @@ class H2FloodIO(asyncio.Protocol):
         self._conn = h2.connection.H2Connection()
         self._conn.initiate_connection()
         self._send()
-        # XXX: timeout to wait for settings frame
+        self._recv_settings_timeout_handle = self._loop.call_later(
+            self._recv_settings_timeout, self._recv_settings_timeout_cb)
    
     def _send(self):
         data = self._conn.data_to_send()
@@ -155,12 +158,20 @@ class H2FloodIO(asyncio.Protocol):
             if not self._abort_handle.done():
                 self._abort_handle.cancel()
             self._abort_handle = None
+        if self._recv_settings_timeout_handle is not None:
+            self._recv_settings_timeout_handle.cancel()
+            self._recv_settings_timeout_handle = None
         if self._transport:
             self._connections.remove(hash(self._transport))
             self._transport.abort()
             self._transport = None
 
     def data_received(self, data):
+        # we rely here on the fact that frame settings has to
+        # fit even tiniest sock read buffer
+        if self._recv_settings_timeout_handle is not None:
+            self._recv_settings_tiemout_hanle.cancel()
+            self._recv_settings_timeout_handle = None
         _events = self._conn.receive_data(data)
         if not self._recv:
             self._transport.pause_reading()
@@ -179,6 +190,14 @@ class H2FloodIO(asyncio.Protocol):
         if self._tranposrt is None:
             return
         self._tranport.write(self._conn.data_to_send())
+
+    def _recv_settings_timeout_cb(self) -> None:
+        self._recv_settings_timeout_handle = None
+        if self._transport is None:
+            return
+        if self._requests_sent:
+            return
+        self._abort()
 
 
 # XXX: add instrumentation to keep track of connection lifetime,
