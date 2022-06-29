@@ -21,7 +21,7 @@ JINJA = Environment()
 
 class Tools:
     @staticmethod
-    def humanbits(i: int) -> str:
+    def humanbits(i: float) -> str:
         MULTIPLES = ["Bit", "kBit", "MBit", "GBit"]
         if i > 0:
             base = 1024
@@ -32,7 +32,7 @@ class Tools:
             return '0 Bit'
 
     @staticmethod
-    def humanformat(i: int) -> str:
+    def humanformat(i: float) -> str:
         MULTIPLES = ['', 'k', 'M', 'G']
         if i > 0:
             base = 1000

@@ -1,10 +1,11 @@
 import logging
+import os
+import sys
 import warnings
 from asyncio.log import logger as asyncio_logger
-from contextlib import suppress
 from multiprocessing import cpu_count
 from pathlib import Path
-from typing import Optional, Set, Tuple
+from typing import Set
 
 from colorama import Fore
 
@@ -31,14 +32,10 @@ logger.setLevel('INFO')
 asyncio_logger.addFilter(RemoveUselessWarnings())
 
 
-def setup_worker_logger(process_index: Optional[Tuple[int, int]]) -> None:
-    if process_index is None:
-        return
-    ind, total = process_index
-    formatter = logging.Formatter(
-        f"[{ind}/{total}] {LOGGER_MSG_FORMAT}", datefmt=LOGGER_DATE_FORMAT)
-    with suppress(Exception):
-        logger.parent.handlers[0].setFormatter(formatter)
+def setup_worker_logging(process_index: int) -> None:
+    if process_index > 0:
+        logger.setLevel(logging.ERROR)
+        sys.stdout = open(os.devnull, 'w')
 
 
 ROOT_DIR = Path(__file__).parent.parent
@@ -54,9 +51,9 @@ MAX_COPIES_AUTO = 4
 
 USE_ONLY_MY_IP = 100
 SCHEDULER_INITIAL_CAPACITY = 3
-SCHEDULER_MIN_INIT_FRACTION = 0.1
+SCHEDULER_MIN_INIT_FRACTION = 0.15
 SCHEDULER_MAX_INIT_FRACTION = 0.5
-SCHEDULER_FORK_SCALE = 3
+SCHEDULER_FORK_SCALE = 6
 CONN_PROBE_PERIOD = 5
 PROXY_ALIVE_PRIO_THRESHOLD = 0.25
 PROXY_ALIVE_PRIO_RATE = 0.5

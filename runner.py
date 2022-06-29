@@ -9,13 +9,15 @@ import random
 import signal
 import sys
 import time
+from contextlib import suppress
 from functools import partial
+from multiprocessing import shared_memory
 from typing import List, Optional, Set, Tuple, Union
 
 from src.cli import init_argparse
 from src.core import (
     cl, COPIES_AUTO, CPU_COUNT, DEFAULT_THREADS, LIMITS_PADDING, logger, MAX_COPIES_AUTO, SCHEDULER_MAX_INIT_FRACTION,
-    SCHEDULER_MIN_INIT_FRACTION, setup_worker_logger, UDP_FAILURE_BUDGET_FACTOR, UDP_FAILURE_DELAY_SECONDS,
+    SCHEDULER_MIN_INIT_FRACTION, setup_worker_logging, UDP_FAILURE_BUDGET_FACTOR, UDP_FAILURE_DELAY_SECONDS,
     USE_ONLY_MY_IP,
 )
 from src.i18n import DEFAULT_LANGUAGE, set_language, translate as t
@@ -119,7 +121,10 @@ async def run_udp_flood(runnable: AsyncUdpFlood) -> None:
                 num_failures = 0
 
 
-async def run_ddos(args):
+async def run_ddos(
+    args, threads, conn_stats: shared_memory.ShareableList,
+    process_index: int, num_copies: int
+):
     local_config, config = await load_system_configs()
     if config is None:
         config = local_config
@@ -135,19 +140,6 @@ async def run_ddos(args):
         args.scheduler_initial_capacity,
         args.scheduler_fork_scale
     )
-
-    # we are going to fetch proxies even in case we have only UDP
-    # targets because the list of targets might change at any point in time
-    threads = args.threads or DEFAULT_THREADS
-    max_conns = fix_ulimits()
-    if max_conns is not None:
-        max_conns -= LIMITS_PADDING  # keep some for other needs
-        if max_conns < threads:
-            logger.warning(
-                f"{cl.MAGENTA}{t('The number of threads has been reduced to')} {max_conns} "
-                f"{t('due to the limitations of your system')}{cl.RESET}"
-            )
-            threads = max_conns
 
     logger.info(f"{cl.GREEN}{t('Launching the attack...')}{cl.RESET}")
     # Give user some time to read the output
@@ -292,30 +284,45 @@ async def run_ddos(args):
 
     tasks = []
 
+    async def conn_stats_collector():
+        stats_collection_rate = 1.0
+        while True:
+            try:
+                await asyncio.sleep(stats_collection_rate)
+                conn_stats[process_index] = len(connections)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+
+    tasks.append(loop.create_task(conn_stats_collector()))
+
     async def stats_printer():
         net_stats = NetStats()
         it, cycle_start = 0, time.perf_counter()
         refresh_rate = 5
 
-        print_status(threads, use_my_ip, False)
+        print_status(threads * num_copies, use_my_ip, False)
         while True:
             await asyncio.sleep(refresh_rate)
+            num_connections = sum(list(conn_stats))
             show_statistic(
                 net_stats,
                 tcp_task_group.capacity if tcp_task_group is not None else None,
-                len(connections),
+                num_connections,
             )
             if it >= 20:
                 it = 0
                 passed = time.perf_counter() - cycle_start
                 overtime = bool(passed > 2 * refresh_rate)
                 print_banner(args)
-                print_status(threads, use_my_ip, overtime)
+                print_status(threads * num_copies, use_my_ip, overtime)
 
             it, cycle_start = it + 1, time.perf_counter()
 
     # setup coroutine to print stats
-    tasks.append(loop.create_task(stats_printer()))
+    if process_index == 0:
+        tasks.append(loop.create_task(stats_printer()))
 
     async def reload_targets():
         period = 15 * 60
@@ -387,15 +394,22 @@ def _main_signal_handler(ps, *args):
             p.terminate()
 
 
-def _worker_process(args, lang: str, process_index: Optional[Tuple[int, int]]):
+def _worker_process(
+    args, threads, lang: str,
+    conn_stats: shared_memory.ShareableList,
+    process_index: int, num_copies: int
+):
     try:
         if IS_DOCKER:
             random.seed()
         set_language(lang)  # set language again for the subprocess
-        setup_worker_logger(process_index)
+        fix_ulimits()
+        setup_worker_logging(process_index)
         loop = setup_event_loop()
-        loop.run_until_complete(run_ddos(args))
+        loop.run_until_complete(run_ddos(args, threads, conn_stats, process_index, num_copies))
     except KeyboardInterrupt:
+        with suppress(Exception):
+            conn_stats.shm.close()
         sys.exit()
 
 
@@ -420,13 +434,20 @@ def main():
             f"{cl.MAGENTA}{t('The number of copies is automatically reduced to')} {max_copies}{cl.RESET}"
         )
 
+    threads = args.threads or DEFAULT_THREADS
+    total_threads = threads * num_copies
     port_range_size = detect_port_range_size()
-    max_ports = port_range_size - LIMITS_PADDING
-    if num_copies * (args.threads or DEFAULT_THREADS) > max_ports:
-        args.threads = int(max_ports / num_copies)
+    max_threads = port_range_size - LIMITS_PADDING
+    max_conns = fix_ulimits()
+    if max_conns is not None:
+        max_threads = min(max_threads, max_conns - LIMITS_PADDING)
+
+    if total_threads > max_threads:
+        threads = int(max_threads / num_copies)
         if args.threads:
+            print()
             logger.warning(
-                f"{cl.MAGENTA}{t('The number of threads has been reduced to')} {args.threads} "
+                f"{cl.MAGENTA}{t('The total number of threads has been reduced to')} {threads * num_copies} "
                 f"{t('due to the limitations of your system')}{cl.RESET}"
             )
 
@@ -449,19 +470,27 @@ def main():
 
     processes = []
     mp.set_start_method("spawn")
-    for ind in range(num_copies):
-        pos = (ind + 1, num_copies) if num_copies > 1 else None
-        p = mp.Process(target=_worker_process, args=(args, lang, pos), daemon=True)
-        processes.append(p)
+    conn_stats = shared_memory.ShareableList([0] * num_copies)
+    try:
+        for index in range(num_copies):
+            p = mp.Process(
+                target=_worker_process,
+                args=(args, threads, lang, conn_stats, index, num_copies),
+                daemon=True,
+            )
+            processes.append(p)
 
-    signal.signal(signal.SIGINT, partial(_main_signal_handler, processes, logger))
-    signal.signal(signal.SIGTERM, partial(_main_signal_handler, processes, logger))
+        signal.signal(signal.SIGINT, partial(_main_signal_handler, processes, logger))
+        signal.signal(signal.SIGTERM, partial(_main_signal_handler, processes, logger))
 
-    for p in processes:
-        p.start()
+        for p in processes:
+            p.start()
 
-    for p in processes:
-        p.join()
+        for p in processes:
+            p.join()
+    finally:
+        conn_stats.shm.close()
+        conn_stats.shm.unlink()
 
 
 if __name__ == '__main__':

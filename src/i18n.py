@@ -67,9 +67,9 @@ TRANSLATIONS = {
         'ua': 'Доступна нова версія, рекомендуємо оновити',
         'es': 'Una nueva versión está disponible. Se recomienda actualizar',
     },
-    'The number of threads has been reduced to': {
-        'ua': 'Кількість потоків зменшено до',
-        'es': 'El número de hilos se ha reducido a',
+    'The total number of threads has been reduced to': {
+        'ua': 'Загальну кількість потоків зменшено до',
+        'es': 'El número total de hilos se ha reducido a',
     },
     'due to the limitations of your system': {
         'ua': 'через обмеження вашої системи',
