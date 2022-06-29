@@ -215,9 +215,8 @@ class AsyncTcpFlood(FloodBase):
             (":authority", self._url.raw_authority),
             (":scheme", "https"),
         ]
-        del http_headers["Host"]
-        if "Content-Length" in http_headers:
-            del http_headers["Content-Length"]
+        http_headers.pop("Host", None)
+        http_headers.pop("Content-Length", None)
         h2_headers.extend(http_headers.items())
         return (h2_headers, body)
 
@@ -319,12 +318,12 @@ class AsyncTcpFlood(FloodBase):
 
 
     async def HTTP_TEMPLATE(self, on_connect=None) -> bool:
-        def payload():
+        def payload() -> bytes:
             renderer = self.requests_renderer()
             reqs = [None]*self._settings.requests_per_buffer
             for ind in range(self._settings.requests_per_buffer):
                 (req_type, path_qs, headers, body) = next(renderer)
-                req[ind] = self.build_request(
+                reqs[ind] = self.build_request(
                     req_type=req_type,
                     path_qs=path_qs,
                     headers=headers,
@@ -364,7 +363,7 @@ class AsyncTcpFlood(FloodBase):
         reqs = [None]*self._settings.requests_per_buffer
         for ind in range(self._settings.requests_per_buffer):
             (req_type, path_qs, headers, body) = next(renderer)
-            req[ind] = self.build_h2_request(
+            reqs[ind] = self.build_h2_request(
                 req_type=req_type,
                 path_qs=path_qs,
                 headers=headers,
