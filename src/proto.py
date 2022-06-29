@@ -22,6 +22,8 @@ from h2.events import WindowUpdated
 from h2.exceptions import NoAvailableStreamIDError, TooManyStreamsError
 
 
+H2Headers = List[Tuple[str, str]]
+H2Request = Tuple[H2Headers, Optional[bytes]]
 FloodSpecGen = Generator[Tuple[int, Any], None, None]
 
 
@@ -68,10 +70,6 @@ class FloodSpec:
     def from_callable(packet: Callable[[], bytes], num_packets: int) -> FloodSpecGen:
         for _ in range(num_packets):
             yield FloodOp.WRITE, packet()
-
-
-H2Headers = List[Tuple[str, str]]
-H2Request = Tuple[H2Headers, Optional[bytes]]
 
 
 class H2FloodIO(asyncio.Protocol):
