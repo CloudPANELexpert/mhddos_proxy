@@ -16,7 +16,8 @@ from typing import List, Optional, Set, Tuple, Union
 
 from src.cli import init_argparse
 from src.core import (
-    cl, COPIES_AUTO, CPU_COUNT, DEFAULT_THREADS, LIMITS_PADDING, logger, MAX_COPIES_AUTO, SCHEDULER_MAX_INIT_FRACTION,
+    cl, COPIES_AUTO, CPU_COUNT, DEFAULT_THREADS, IS_AUTO_MH, IS_DOCKER, LIMITS_PADDING, logger, MAX_COPIES_AUTO,
+    SCHEDULER_MAX_INIT_FRACTION,
     SCHEDULER_MIN_INIT_FRACTION, setup_worker_logging, UDP_FAILURE_BUDGET_FACTOR, UDP_FAILURE_DELAY_SECONDS,
     USE_ONLY_MY_IP,
 )
@@ -302,7 +303,7 @@ async def run_ddos(
         it, cycle_start = 0, time.perf_counter()
         refresh_rate = 5
 
-        print_status(threads * num_copies, use_my_ip, False)
+        print_status(threads, num_copies, use_my_ip, False)
         while True:
             await asyncio.sleep(refresh_rate)
             num_connections = sum(list(conn_stats))
@@ -316,7 +317,7 @@ async def run_ddos(
                 passed = time.perf_counter() - cycle_start
                 overtime = bool(passed > 2 * refresh_rate)
                 print_banner(args)
-                print_status(threads * num_copies, use_my_ip, overtime)
+                print_status(threads, num_copies, use_my_ip, overtime)
 
             it, cycle_start = it + 1, time.perf_counter()
 
@@ -382,10 +383,6 @@ async def run_ddos(
     await asyncio.gather(*tasks, return_exceptions=True)
 
 
-IS_AUTO_MH = os.getenv('AUTO_MH')
-IS_DOCKER = os.getenv('IS_DOCKER')
-
-
 def _main_signal_handler(ps, *args):
     if not IS_AUTO_MH:
         logger.info(f"{cl.BLUE}{t('Shutting down...')}{cl.RESET}")
@@ -418,6 +415,21 @@ def main():
 
     lang = args.lang or DEFAULT_LANGUAGE
     set_language(lang)
+
+    if lang == DEFAULT_LANGUAGE:
+        print(
+            f"{cl.CYAN}\nУвага!\nОновлений <<mhddos_proxy>> в новому форматі!\nПояснення в оф. каналі IT Army: https://t.me/itarmyofukraine2022/479\n\nПерейдіть за "
+            f"посиланням для отримання інструкцій та "
+            f"завантаження\nhttps://github.com/porthole-ascend-cinnamon/mhddos_proxy_releases\n{cl.RESET}"
+        )
+    else:
+        print(
+            f"{cl.CYAN}\nAttention!\nUpdated <<mhddos_proxy>> in a new format!\nExplanation in the official IT Army channel: "
+            f"https://t.me/itarmyofukraine2022/479\n\nFollow the "
+            f"link for instructions and "
+            f"download\nhttps://github.com/porthole-ascend-cinnamon/mhddos_proxy_releases\n{cl.RESET}"
+        )
+    time.sleep(3.5)
 
     if not any((args.targets, args.targets_config, args.itarmy)):
         logger.error(f"{cl.RED}{t('No targets specified for the attack')}{cl.RESET}")

@@ -2,8 +2,8 @@ from typing import Optional, Tuple
 
 from .core import cl, CPU_COUNT, DEFAULT_THREADS, logger, USE_ONLY_MY_IP
 from .i18n import translate as t
-from .utils import Tools
 from .system import NetStats
+from .utils import Tools
 
 
 def show_statistic(
@@ -34,7 +34,8 @@ def show_statistic(
 
 
 def print_status(
-    num_threads: int,
+    threads: int,
+    copies: int,
     use_my_ip: int,
     overtime: bool,
 ):
@@ -45,8 +46,13 @@ def print_status(
     else:
         proxies_message = t('Using both proxies and your IP/VPN')
 
+    if copies > 1:
+        threads_text = f'{copies * threads} ({copies} x {threads})'
+    else:
+        threads_text = str(threads)
+
     logger.info(
-        f"{cl.YELLOW}{t('Threads')}: {cl.BLUE}{num_threads} | "
+        f"{cl.YELLOW}{t('Threads')}: {cl.BLUE}{threads_text} | "
         f"{cl.MAGENTA}{proxies_message}{cl.RESET}"
     )
 

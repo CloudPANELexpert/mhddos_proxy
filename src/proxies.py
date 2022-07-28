@@ -87,7 +87,7 @@ class ProxySet:
             len(self._connections) > self._num_proxies * PROXY_ALIVE_PRIO_THRESHOLD,
             random.random() < PROXY_ALIVE_PRIO_RATE
         ))
-        return random.choice(self._connections.keys() if prio else self._loaded_proxies)
+        return random.choice(list(self._connections.keys()) if prio else self._loaded_proxies)
 
     def pick_random_connector(self) -> Optional[ProxyConnector]:
         proxy_url = self.pick_random()
@@ -107,8 +107,6 @@ class ProxySet:
 
 
 class NoProxySet:
-    alive = []
-
     @staticmethod
     def pick_random(self) -> Optional[str]:
         return None

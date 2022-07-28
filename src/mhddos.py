@@ -81,6 +81,8 @@ class AttackSettings:
             if v is not None:
                 assert hasattr(settings, k)
                 setattr(settings, k, v)
+
+        self.requests_per_buffer = min(self.requests_per_buffer, self.requests_per_connection)
         return settings
 
 
